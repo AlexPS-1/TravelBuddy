@@ -5,6 +5,7 @@ import com.example.travelbuddy.ai.dto.CandidateDto
 import com.example.travelbuddy.ai.dto.CategoryDto
 import com.example.travelbuddy.ai.dto.GenerateCandidatesRequestDto
 import com.example.travelbuddy.data.trips.TripSessionSnapshot
+import com.example.travelbuddy.model.plan.PlanBlock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -90,6 +91,10 @@ class TripSession {
     val quickPrefsByCategory: StateFlow<Map<CategoryDto, CategoryQuickPrefs>> =
         _quickPrefsByCategory.asStateFlow()
 
+    // --- Added for Schedule Persistence ---
+    private val _planBlocks = MutableStateFlow<List<PlanBlock>>(emptyList())
+    val planBlocks: StateFlow<List<PlanBlock>> = _planBlocks.asStateFlow()
+
     fun setCity(city: String) {
         _city.value = city
     }
@@ -144,12 +149,39 @@ class TripSession {
         _quickPrefsByCategory.value = _quickPrefsByCategory.value - category
     }
 
+    // --- Schedule Methods ---
+    fun addBlock(block: PlanBlock) {
+        _planBlocks.value = _planBlocks.value + block
+    }
+
+    fun removeBlock(blockId: String) {
+        _planBlocks.value = _planBlocks.value.filterNot { it.id == blockId }
+    }
+
+    fun moveBlock(blockId: String, up: Boolean) {
+        val list = _planBlocks.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == blockId }
+        if (idx == -1) return
+        val targetIdx = if (up) idx - 1 else idx + 1
+        if (targetIdx in list.indices) {
+            val tmp = list[targetIdx]
+            list[targetIdx] = list[idx]
+            list[idx] = tmp
+            _planBlocks.value = list
+        }
+    }
+
+    fun clearSchedule() {
+        _planBlocks.value = emptyList()
+    }
+
     fun toSnapshot(): TripSessionSnapshot {
         return TripSessionSnapshot(
             city = _city.value,
             globalTips = _globalTips.value,
             suggestionsByCategory = _suggestionsByCategory.value,
-            quickPrefsByCategory = _quickPrefsByCategory.value
+            quickPrefsByCategory = _quickPrefsByCategory.value,
+            planBlocks = _planBlocks.value // Added to snapshot
         )
     }
 
@@ -159,6 +191,7 @@ class TripSession {
         _suggestionsByCategory.value = snapshot.suggestionsByCategory
         _quickPrefsByCategory.value =
             snapshot.quickPrefsByCategory.mapValues { (_, v) -> v.safeCopy() }
+        _planBlocks.value = snapshot.planBlocks // Loaded from snapshot
     }
 }
 

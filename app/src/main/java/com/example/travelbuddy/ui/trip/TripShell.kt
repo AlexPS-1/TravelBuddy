@@ -1,3 +1,4 @@
+// File: com/example/travelbuddy/ui/trip/TripShell.kt
 package com.example.travelbuddy.ui.trip
 
 import androidx.activity.compose.BackHandler
@@ -20,7 +21,6 @@ import com.example.travelbuddy.data.AiRepository
 import com.example.travelbuddy.data.prefs.PinnedStore
 import com.example.travelbuddy.data.session.TripSessionStore
 import com.example.travelbuddy.data.trips.TripStore
-import com.example.travelbuddy.model.plan.PlanStore
 import com.example.travelbuddy.nav.AppRoutes
 import com.example.travelbuddy.ui.pinned.PinnedScreen
 import com.example.travelbuddy.ui.plan.PlanScreen
@@ -28,11 +28,13 @@ import com.example.travelbuddy.ui.plan.PlanViewModel
 import com.example.travelbuddy.ui.suggestions.SuggestionsScreen
 import com.example.travelbuddy.ui.suggestions.SuggestionsViewModel
 import com.google.gson.Gson
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.map
 
+@OptIn(FlowPreview::class)
 @Composable
 fun TripShell(
     tripId: String,
@@ -44,9 +46,9 @@ fun TripShell(
     modifier: Modifier = Modifier
 ) {
     val tabNavController = rememberNavController()
+    val session = remember(tripId) { tripSessionStore.getOrCreate(tripId) }
 
-    val planStore = remember(tripId) { PlanStore() }
-    val planViewModel = remember(tripId) { PlanViewModel(planStore) }
+    val planViewModel = remember(tripId) { PlanViewModel(session) }
 
     val suggestionsViewModel = remember(tripId) {
         SuggestionsViewModel(
@@ -57,23 +59,21 @@ fun TripShell(
         )
     }
 
-    val session = remember(tripId) { tripSessionStore.getOrCreate(tripId) }
     val gson = remember { Gson() }
 
-    // Load persisted session snapshot on entering the trip
     LaunchedEffect(tripId) {
         val snap = tripStore.loadSession(tripId)
         if (snap != null) session.applySnapshot(snap)
     }
 
-    // Auto-save session snapshot (stable fingerprint + debounce)
     LaunchedEffect(tripId) {
         combine(
             session.city,
             session.globalTips,
             session.suggestionsByCategory,
-            session.quickPrefsByCategory
-        ) { _, _, _, _ ->
+            session.quickPrefsByCategory,
+            session.planBlocks // Added for schedule auto-save
+        ) { _, _, _, _, _ ->
             session.toSnapshot()
         }
             .map { snapshot -> gson.toJson(snapshot) to snapshot }

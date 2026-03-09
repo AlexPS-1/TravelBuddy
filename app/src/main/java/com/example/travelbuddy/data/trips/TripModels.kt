@@ -3,6 +3,7 @@ package com.example.travelbuddy.data.trips
 import com.example.travelbuddy.ai.dto.CandidateDto
 import com.example.travelbuddy.ai.dto.CategoryDto
 import com.example.travelbuddy.data.session.CategoryQuickPrefs
+import com.example.travelbuddy.model.plan.PlanBlock
 
 data class TripSummary(
     val tripId: String,
@@ -17,5 +18,6 @@ data class TripSessionSnapshot(
     val city: String = "",
     val globalTips: List<String> = emptyList(),
     val suggestionsByCategory: Map<CategoryDto, List<CandidateDto>> = emptyMap(),
-    val quickPrefsByCategory: Map<CategoryDto, CategoryQuickPrefs> = emptyMap()
+    val quickPrefsByCategory: Map<CategoryDto, CategoryQuickPrefs> = emptyMap(),
+    val planBlocks: List<PlanBlock> = emptyList() // Added schedule persistence
 )

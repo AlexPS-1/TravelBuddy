@@ -1,3 +1,4 @@
+// File: com/example/travelbuddy/model/plan/PlanScreen.kt
 package com.example.travelbuddy.ui.plan
 
 import androidx.compose.foundation.layout.Arrangement
@@ -37,9 +38,12 @@ fun PlanScreen(
     suggestionsViewModel: SuggestionsViewModel,
     modifier: Modifier = Modifier
 ) {
-    val blocks by planViewModel.blocks.collectAsState()
+    val allBlocks by planViewModel.blocks.collectAsState()
     val suggestionsState by suggestionsViewModel.state.collectAsState()
     val pinned: List<CandidateDto> = suggestionsState.pinnedCandidates
+
+    var selectedDayIndex by remember { mutableIntStateOf(0) }
+    val dayBlocks = allBlocks.filter { it.dayIndex == selectedDayIndex }
 
     var anchorTitle by remember { mutableStateOf("") }
     var anchorTime by remember { mutableStateOf("10:00") }
@@ -47,7 +51,7 @@ fun PlanScreen(
 
     Column(modifier = modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Schedule", style = MaterialTheme.typography.headlineSmall)
-        Text("Day 1 (MVP)", style = MaterialTheme.typography.labelMedium)
+        Text("Day ${selectedDayIndex + 1}", style = MaterialTheme.typography.labelMedium)
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -78,7 +82,7 @@ fun PlanScreen(
 
                 Button(
                     onClick = {
-                        planViewModel.addAnchor(anchorTitle, anchorTime, anchorDuration)
+                        planViewModel.addAnchor(anchorTitle, anchorTime, anchorDuration, selectedDayIndex)
                         anchorTitle = ""
                     },
                     modifier = Modifier.fillMaxWidth()
@@ -93,29 +97,17 @@ fun PlanScreen(
 
                     pinned.take(6).forEach { cand ->
                         OutlinedButton(
-                            onClick = { planViewModel.addSuggestionFromPinned(cand) },
+                            onClick = { planViewModel.addSuggestionFromPinned(cand, selectedDayIndex) },
                             modifier = Modifier.fillMaxWidth()
                         ) { Text(cand.name) }
                     }
-
-                    if (pinned.size > 6) {
-                        Text("Showing 6 of ${pinned.size}. (Search/filter soon.)", style = MaterialTheme.typography.labelMedium)
-                    }
-                }
-            }
-        } else {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(12.dp)) {
-                    Text("No pinned places yet.", style = MaterialTheme.typography.titleSmall)
-                    Spacer(Modifier.height(6.dp))
-                    Text("Pin a few suggestions first, then you can add them to your schedule.", style = MaterialTheme.typography.bodyMedium)
                 }
             }
         }
 
         Text("Blocks", style = MaterialTheme.typography.titleMedium)
 
-        if (blocks.isEmpty()) {
+        if (dayBlocks.isEmpty()) {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp)) {
                     Text("Empty schedule", style = MaterialTheme.typography.titleSmall)
@@ -128,7 +120,7 @@ fun PlanScreen(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                items(blocks, key = { it.id }) { block ->
+                items(dayBlocks, key = { it.id }) { block ->
                     BlockCard(
                         block = block,
                         onUp = { planViewModel.moveUp(block.id) },
