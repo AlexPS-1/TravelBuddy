@@ -1,4 +1,3 @@
-// File: com/example/travelbuddy/data/session/TripSessionStore.kt
 package com.example.travelbuddy.data.session
 
 import com.example.travelbuddy.ai.dto.CandidateDto
@@ -11,11 +10,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 class TripSessionStore {
-
     private val sessions: MutableMap<String, TripSession> = mutableMapOf()
 
-    fun getOrCreate(tripId: String): TripSession =
-        sessions.getOrPut(tripId) { TripSession() }
+    fun getOrCreate(tripId: String): TripSession = sessions.getOrPut(tripId) { TripSession() }
 
     fun clear(tripId: String) {
         sessions.remove(tripId)
@@ -29,7 +26,6 @@ class TripSessionStore {
 data class CategoryQuickPrefs(
     val presetId: String? = null,
     val budgetLevel: Float = 0.5f,
-
     val pace: Float = 0.55f,
     val walkingTolerance: Float = 0.65f,
     val iconicVsLocal: Float = 0.6f,
@@ -58,7 +54,8 @@ data class CategoryQuickPrefs(
 )
 
 private fun CategoryQuickPrefs.safeCopy(): CategoryQuickPrefs {
-    fun <T> safeList(getter: () -> List<T>): List<T> = runCatching(getter).getOrNull() ?: emptyList()
+    fun safeList(getter: () -> List<String>): List<String> = runCatching(getter).getOrNull() ?: emptyList()
+
     return copy(
         foodMealMoments = safeList { foodMealMoments },
         foodCuisines = safeList { foodCuisines },
@@ -71,7 +68,6 @@ private fun CategoryQuickPrefs.safeCopy(): CategoryQuickPrefs {
 }
 
 class TripSession {
-
     private val _city = MutableStateFlow("")
     val city: StateFlow<String> = _city.asStateFlow()
 
@@ -91,7 +87,6 @@ class TripSession {
     val quickPrefsByCategory: StateFlow<Map<CategoryDto, CategoryQuickPrefs>> =
         _quickPrefsByCategory.asStateFlow()
 
-    // --- Added for Schedule Persistence ---
     private val _planBlocks = MutableStateFlow<List<PlanBlock>>(emptyList())
     val planBlocks: StateFlow<List<PlanBlock>> = _planBlocks.asStateFlow()
 
@@ -149,30 +144,61 @@ class TripSession {
         _quickPrefsByCategory.value = _quickPrefsByCategory.value - category
     }
 
-    // --- Schedule Methods ---
     fun addBlock(block: PlanBlock) {
-        _planBlocks.value = _planBlocks.value + block
+        val current = _planBlocks.value
+        val insertAfterIndex = current.indexOfLast { it.dayIndex == block.dayIndex }
+
+        _planBlocks.value = if (insertAfterIndex == -1) {
+            val firstLaterDayIndex = current.indexOfFirst { it.dayIndex > block.dayIndex }
+            if (firstLaterDayIndex == -1) {
+                current + block
+            } else {
+                current.toMutableList().apply {
+                    add(firstLaterDayIndex, block)
+                }.toList()
+            }
+        } else {
+            current.toMutableList().apply {
+                add(insertAfterIndex + 1, block)
+            }.toList()
+        }
     }
 
     fun removeBlock(blockId: String) {
         _planBlocks.value = _planBlocks.value.filterNot { it.id == blockId }
     }
 
-    fun moveBlock(blockId: String, up: Boolean) {
-        val list = _planBlocks.value.toMutableList()
-        val idx = list.indexOfFirst { it.id == blockId }
-        if (idx == -1) return
-        val targetIdx = if (up) idx - 1 else idx + 1
-        if (targetIdx in list.indices) {
-            val tmp = list[targetIdx]
-            list[targetIdx] = list[idx]
-            list[idx] = tmp
-            _planBlocks.value = list
-        }
+    fun moveBlockWithinDay(blockId: String, dayIndex: Int, up: Boolean) {
+        val current = _planBlocks.value
+        val dayPositions = current.withIndex()
+            .filter { it.value.dayIndex == dayIndex }
+            .map { it.index }
+
+        if (dayPositions.isEmpty()) return
+
+        val currentGlobalIndex = current.indexOfFirst { it.id == blockId && it.dayIndex == dayIndex }
+        if (currentGlobalIndex == -1) return
+
+        val currentDayPosition = dayPositions.indexOf(currentGlobalIndex)
+        if (currentDayPosition == -1) return
+
+        val targetDayPosition = if (up) currentDayPosition - 1 else currentDayPosition + 1
+        if (targetDayPosition !in dayPositions.indices) return
+
+        val targetGlobalIndex = dayPositions[targetDayPosition]
+        val mutable = current.toMutableList()
+        val temp = mutable[currentGlobalIndex]
+        mutable[currentGlobalIndex] = mutable[targetGlobalIndex]
+        mutable[targetGlobalIndex] = temp
+        _planBlocks.value = mutable.toList()
     }
 
     fun clearSchedule() {
         _planBlocks.value = emptyList()
+    }
+
+    fun clearDay(dayIndex: Int) {
+        _planBlocks.value = _planBlocks.value.filterNot { it.dayIndex == dayIndex }
     }
 
     fun toSnapshot(): TripSessionSnapshot {
@@ -181,7 +207,7 @@ class TripSession {
             globalTips = _globalTips.value,
             suggestionsByCategory = _suggestionsByCategory.value,
             quickPrefsByCategory = _quickPrefsByCategory.value,
-            planBlocks = _planBlocks.value // Added to snapshot
+            planBlocks = _planBlocks.value
         )
     }
 
@@ -189,9 +215,11 @@ class TripSession {
         _city.value = snapshot.city
         _globalTips.value = snapshot.globalTips
         _suggestionsByCategory.value = snapshot.suggestionsByCategory
-        _quickPrefsByCategory.value =
-            snapshot.quickPrefsByCategory.mapValues { (_, v) -> v.safeCopy() }
-        _planBlocks.value = snapshot.planBlocks // Loaded from snapshot
+        _quickPrefsByCategory.value = snapshot.quickPrefsByCategory.mapValues { (_, value) ->
+            value.safeCopy()
+        }
+        _planBlocks.value = snapshot.planBlocks
+            .sortedWith(compareBy<PlanBlock> { it.dayIndex }.thenBy { it.startTime ?: "99:99" })
     }
 }
 
@@ -200,6 +228,7 @@ private fun CandidateDto.stableKey(): String {
     val q = location.googleMapsQuery ?: ""
     val addr = location.addressHint ?: ""
     val area = location.areaHint ?: ""
+
     return listOf(candidateId, name, location.displayName, pid, q, addr, area)
         .joinToString("|")
         .lowercase()

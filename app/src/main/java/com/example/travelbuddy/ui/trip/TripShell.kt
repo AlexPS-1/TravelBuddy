@@ -1,4 +1,3 @@
-// File: com/example/travelbuddy/ui/trip/TripShell.kt
 package com.example.travelbuddy.ui.trip
 
 import androidx.activity.compose.BackHandler
@@ -28,13 +27,11 @@ import com.example.travelbuddy.ui.plan.PlanViewModel
 import com.example.travelbuddy.ui.suggestions.SuggestionsScreen
 import com.example.travelbuddy.ui.suggestions.SuggestionsViewModel
 import com.google.gson.Gson
-import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.map
 
-@OptIn(FlowPreview::class)
 @Composable
 fun TripShell(
     tripId: String,
@@ -47,9 +44,7 @@ fun TripShell(
 ) {
     val tabNavController = rememberNavController()
     val session = remember(tripId) { tripSessionStore.getOrCreate(tripId) }
-
     val planViewModel = remember(tripId) { PlanViewModel(session) }
-
     val suggestionsViewModel = remember(tripId) {
         SuggestionsViewModel(
             tripId = tripId,
@@ -58,12 +53,13 @@ fun TripShell(
             tripSessionStore = tripSessionStore
         )
     }
-
     val gson = remember { Gson() }
 
     LaunchedEffect(tripId) {
         val snap = tripStore.loadSession(tripId)
-        if (snap != null) session.applySnapshot(snap)
+        if (snap != null) {
+            session.applySnapshot(snap)
+        }
     }
 
     LaunchedEffect(tripId) {
@@ -72,7 +68,7 @@ fun TripShell(
             session.globalTips,
             session.suggestionsByCategory,
             session.quickPrefsByCategory,
-            session.planBlocks // Added for schedule auto-save
+            session.planBlocks
         ) { _, _, _, _, _ ->
             session.toSnapshot()
         }
@@ -145,6 +141,8 @@ private fun NavHostController.navigateSingleTop(route: String) {
     navigate(route) {
         launchSingleTop = true
         restoreState = true
-        popUpTo(graph.startDestinationId) { saveState = true }
+        popUpTo(graph.startDestinationId) {
+            saveState = true
+        }
     }
 }
