@@ -18,6 +18,7 @@ class TripStore(
     private val gson = Gson()
 
     private val KEY_TRIPS_INDEX = stringPreferencesKey("trips_index_json")
+
     private fun keySession(tripId: String) = stringPreferencesKey("trip_session_$tripId")
 
     fun observeTrips(): Flow<List<TripSummary>> {
@@ -30,7 +31,11 @@ class TripStore(
         appContext.tripDataStore.edit { prefs ->
             val list = decodeTrips(prefs[KEY_TRIPS_INDEX]).toMutableList()
             val idx = list.indexOfFirst { it.tripId == summary.tripId }
-            if (idx >= 0) list[idx] = summary else list.add(0, summary)
+            if (idx >= 0) {
+                list[idx] = summary
+            } else {
+                list.add(0, summary)
+            }
             prefs[KEY_TRIPS_INDEX] = gson.toJson(list)
         }
     }
@@ -52,11 +57,19 @@ class TripStore(
     suspend fun loadSession(tripId: String): TripSessionSnapshot? {
         val prefs = appContext.tripDataStore.data.first()
         val json = prefs[keySession(tripId)] ?: return null
-        return runCatching { gson.fromJson(json, TripSessionSnapshot::class.java) }.getOrNull()
+        return runCatching {
+            gson.fromJson(json, TripSessionSnapshot::class.java)
+        }.getOrNull()
+    }
+
+    suspend fun loadTripSummary(tripId: String): TripSummary? {
+        val prefs = appContext.tripDataStore.data.first()
+        return decodeTrips(prefs[KEY_TRIPS_INDEX]).firstOrNull { it.tripId == tripId }
     }
 
     private fun decodeTrips(json: String?): List<TripSummary> {
         if (json.isNullOrBlank()) return emptyList()
+
         return runCatching {
             val type = object : TypeToken<List<TripSummary>>() {}.type
             gson.fromJson<List<TripSummary>>(json, type) ?: emptyList()

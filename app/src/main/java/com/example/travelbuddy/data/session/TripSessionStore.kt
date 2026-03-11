@@ -5,6 +5,7 @@ import com.example.travelbuddy.ai.dto.CategoryDto
 import com.example.travelbuddy.ai.dto.GenerateCandidatesRequestDto
 import com.example.travelbuddy.data.trips.TripSessionSnapshot
 import com.example.travelbuddy.model.plan.PlanBlock
+import com.example.travelbuddy.model.plan.PlanTimingType
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -146,46 +147,86 @@ class TripSession {
 
     fun addBlock(block: PlanBlock) {
         val current = _planBlocks.value
-        val insertAfterIndex = current.indexOfLast { it.dayIndex == block.dayIndex }
+        val dayItems = current.filter { it.dayIndex == block.dayIndex }
 
-        _planBlocks.value = if (insertAfterIndex == -1) {
-            val firstLaterDayIndex = current.indexOfFirst { it.dayIndex > block.dayIndex }
-            if (firstLaterDayIndex == -1) {
-                current + block
-            } else {
-                current.toMutableList().apply {
-                    add(firstLaterDayIndex, block)
-                }.toList()
+        val insertIndex = when (block.timingType) {
+            PlanTimingType.FIXED -> {
+                val fixedIndices = current.withIndex()
+                    .filter { it.value.dayIndex == block.dayIndex && it.value.timingType == PlanTimingType.FIXED }
+                    .map { it.index }
+
+                if (fixedIndices.isEmpty()) {
+                    current.indexOfFirst { it.dayIndex == block.dayIndex && it.timingType == PlanTimingType.OPTION }
+                        .takeIf { it >= 0 }
+                        ?: current.indexOfFirst { it.dayIndex > block.dayIndex }
+                            .takeIf { it >= 0 }
+                        ?: current.size
+                } else {
+                    val sameDayFixed = dayItems
+                        .filter { it.timingType == PlanTimingType.FIXED }
+                        .sortedBy { it.startTime ?: "99:99" }
+
+                    val newOrder = (sameDayFixed + block).sortedBy { it.startTime ?: "99:99" }
+                    val previousFixed = newOrder
+                        .takeWhile { it.id != block.id }
+                        .lastOrNull()
+
+                    if (previousFixed == null) {
+                        fixedIndices.first()
+                    } else {
+                        current.indexOfFirst { it.id == previousFixed.id } + 1
+                    }
+                }
             }
-        } else {
-            current.toMutableList().apply {
-                add(insertAfterIndex + 1, block)
-            }.toList()
+
+            PlanTimingType.OPTION -> {
+                val lastOptionIndex = current.indexOfLast {
+                    it.dayIndex == block.dayIndex && it.timingType == PlanTimingType.OPTION
+                }
+                if (lastOptionIndex >= 0) {
+                    lastOptionIndex + 1
+                } else {
+                    current.indexOfFirst { it.dayIndex > block.dayIndex }
+                        .takeIf { it >= 0 }
+                        ?: current.size
+                }
+            }
         }
+
+        _planBlocks.value = current.toMutableList().apply {
+            add(insertIndex, block)
+        }.toList()
     }
 
     fun removeBlock(blockId: String) {
         _planBlocks.value = _planBlocks.value.filterNot { it.id == blockId }
     }
 
-    fun moveBlockWithinDay(blockId: String, dayIndex: Int, up: Boolean) {
+    fun moveBlockWithinSection(
+        blockId: String,
+        dayIndex: Int,
+        timingType: PlanTimingType,
+        up: Boolean
+    ) {
         val current = _planBlocks.value
-        val dayPositions = current.withIndex()
-            .filter { it.value.dayIndex == dayIndex }
+        val sectionPositions = current.withIndex()
+            .filter { it.value.dayIndex == dayIndex && it.value.timingType == timingType }
             .map { it.index }
 
-        if (dayPositions.isEmpty()) return
+        if (sectionPositions.isEmpty()) return
 
-        val currentGlobalIndex = current.indexOfFirst { it.id == blockId && it.dayIndex == dayIndex }
+        val currentGlobalIndex = current.indexOfFirst {
+            it.id == blockId && it.dayIndex == dayIndex && it.timingType == timingType
+        }
         if (currentGlobalIndex == -1) return
 
-        val currentDayPosition = dayPositions.indexOf(currentGlobalIndex)
-        if (currentDayPosition == -1) return
+        val currentSectionPosition = sectionPositions.indexOf(currentGlobalIndex)
+        if (currentSectionPosition == -1) return
 
-        val targetDayPosition = if (up) currentDayPosition - 1 else currentDayPosition + 1
-        if (targetDayPosition !in dayPositions.indices) return
+        val targetSectionPosition = if (up) currentSectionPosition - 1 else currentSectionPosition + 1
+        if (targetSectionPosition !in sectionPositions.indices) return
 
-        val targetGlobalIndex = dayPositions[targetDayPosition]
+        val targetGlobalIndex = sectionPositions[targetSectionPosition]
         val mutable = current.toMutableList()
         val temp = mutable[currentGlobalIndex]
         mutable[currentGlobalIndex] = mutable[targetGlobalIndex]
@@ -218,8 +259,11 @@ class TripSession {
         _quickPrefsByCategory.value = snapshot.quickPrefsByCategory.mapValues { (_, value) ->
             value.safeCopy()
         }
-        _planBlocks.value = snapshot.planBlocks
-            .sortedWith(compareBy<PlanBlock> { it.dayIndex }.thenBy { it.startTime ?: "99:99" })
+        _planBlocks.value = snapshot.planBlocks.sortedWith(
+            compareBy<PlanBlock> { it.dayIndex }
+                .thenBy { if (it.timingType == PlanTimingType.FIXED) 0 else 1 }
+                .thenBy { it.startTime ?: "99:99" }
+        )
     }
 }
 

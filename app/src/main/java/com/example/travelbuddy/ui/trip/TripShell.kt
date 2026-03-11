@@ -10,6 +10,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -44,7 +45,6 @@ fun TripShell(
 ) {
     val tabNavController = rememberNavController()
     val session = remember(tripId) { tripSessionStore.getOrCreate(tripId) }
-    val planViewModel = remember(tripId) { PlanViewModel(session) }
     val suggestionsViewModel = remember(tripId) {
         SuggestionsViewModel(
             tripId = tripId,
@@ -54,6 +54,15 @@ fun TripShell(
         )
     }
     val gson = remember { Gson() }
+
+    val tripSummaryState = rememberUpdatedState(newValue = tripId)
+    val planViewModel = remember(tripId) {
+        PlanViewModel(
+            session = session,
+            startDateIso = "1970-01-01",
+            endDateIso = "1970-01-01"
+        )
+    }
 
     LaunchedEffect(tripId) {
         val snap = tripStore.loadSession(tripId)
@@ -80,6 +89,19 @@ fun TripShell(
             }
     }
 
+    val tripSummary = rememberTripSummary(
+        tripId = tripSummaryState.value,
+        tripStore = tripStore
+    )
+
+    val actualPlanViewModel = remember(tripId, tripSummary?.startDateIso, tripSummary?.endDateIso) {
+        PlanViewModel(
+            session = session,
+            startDateIso = tripSummary?.startDateIso ?: "1970-01-01",
+            endDateIso = tripSummary?.endDateIso ?: "1970-01-01"
+        )
+    }
+
     BackHandler {
         val canPop = tabNavController.popBackStack()
         if (!canPop) onExitTrip()
@@ -102,12 +124,26 @@ fun TripShell(
             }
             composable(AppRoutes.TAB_SCHEDULE) {
                 PlanScreen(
-                    planViewModel = planViewModel,
+                    planViewModel = actualPlanViewModel,
                     suggestionsViewModel = suggestionsViewModel
                 )
             }
         }
     }
+}
+
+@Composable
+private fun rememberTripSummary(
+    tripId: String,
+    tripStore: TripStore
+): com.example.travelbuddy.data.trips.TripSummary? {
+    val state = androidx.compose.runtime.produceState<com.example.travelbuddy.data.trips.TripSummary?>(
+        initialValue = null,
+        key1 = tripId
+    ) {
+        value = tripStore.loadTripSummary(tripId)
+    }
+    return state.value
 }
 
 @Composable
@@ -120,19 +156,19 @@ private fun TripBottomNavBar(navController: NavHostController) {
             selected = currentRoute == AppRoutes.TAB_SUGGESTIONS,
             onClick = { navController.navigateSingleTop(AppRoutes.TAB_SUGGESTIONS) },
             label = { Text("Suggestions") },
-            icon = { /* icons later */ }
+            icon = {}
         )
         NavigationBarItem(
             selected = currentRoute == AppRoutes.TAB_PINNED,
             onClick = { navController.navigateSingleTop(AppRoutes.TAB_PINNED) },
             label = { Text("Pinned") },
-            icon = { /* icons later */ }
+            icon = {}
         )
         NavigationBarItem(
             selected = currentRoute == AppRoutes.TAB_SCHEDULE,
             onClick = { navController.navigateSingleTop(AppRoutes.TAB_SCHEDULE) },
             label = { Text("Schedule") },
-            icon = { /* icons later */ }
+            icon = {}
         )
     }
 }

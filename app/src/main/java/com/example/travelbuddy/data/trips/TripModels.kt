@@ -19,5 +19,5 @@ data class TripSessionSnapshot(
     val globalTips: List<String> = emptyList(),
     val suggestionsByCategory: Map<CategoryDto, List<CandidateDto>> = emptyMap(),
     val quickPrefsByCategory: Map<CategoryDto, CategoryQuickPrefs> = emptyMap(),
-    val planBlocks: List<PlanBlock> = emptyList() // Added schedule persistence
+    val planBlocks: List<PlanBlock> = emptyList()
 )
