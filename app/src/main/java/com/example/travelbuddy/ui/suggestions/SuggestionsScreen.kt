@@ -3,6 +3,8 @@ package com.example.travelbuddy.ui.suggestions
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.location.Address
+import android.location.Geocoder
 import android.location.Location
 import android.location.LocationManager
 import android.os.Build
@@ -13,6 +15,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -56,12 +59,12 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.travelbuddy.ai.dto.CandidateDto
 import com.example.travelbuddy.ai.dto.CategoryDto
-import com.example.travelbuddy.data.session.CategoryQuickPrefs
 import com.example.travelbuddy.util.MapsIntents
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
 import java.util.concurrent.Executor
 import java.util.function.Consumer
@@ -84,8 +87,13 @@ fun SuggestionsScreen(
     val listForCategory = state.suggestionsByCategory[selected].orEmpty()
     val listState = rememberLazyListState()
     var prefsExpanded by rememberSaveable(selected.name) { mutableStateOf(false) }
+    var isResolvingNearMe by rememberSaveable { mutableStateOf(false) }
+    var nearMeResolvedLabel by rememberSaveable { mutableStateOf<String?>(null) }
+    var nearMePromptPreview by rememberSaveable { mutableStateOf<String?>(null) }
 
     fun runNormalGenerate() {
+        nearMeResolvedLabel = null
+        nearMePromptPreview = null
         viewModel.updateQuickPrefsForSelected { prefs ->
             prefs.copy(extraText = removeAutoNearMeBlock(prefs.extraText))
         }
@@ -93,8 +101,11 @@ fun SuggestionsScreen(
     }
 
     suspend fun runNearMeGenerate() {
+        isResolvingNearMe = true
+
         val location = getBestCurrentLocation(context)
         if (location == null) {
+            isResolvingNearMe = false
             snackbarHostState.showSnackbar(
                 message = "Could not get your location. Try again outdoors or enable location services.",
                 withDismissAction = true
@@ -102,11 +113,17 @@ fun SuggestionsScreen(
             return
         }
 
+        val placeInfo = getBestPlaceInfo(context, location)
+        nearMeResolvedLabel = placeInfo.label ?: formatCoordinates(location)
+
         val nearMeText = buildNearMePrompt(
             location = location,
+            placeLabel = placeInfo.label,
+            exactAddress = placeInfo.exactAddress,
             category = selected,
             city = state.city.ifBlank { "current city" }
         )
+        nearMePromptPreview = nearMeText
 
         viewModel.updateQuickPrefsForSelected { prefs ->
             prefs.copy(
@@ -117,10 +134,15 @@ fun SuggestionsScreen(
             )
         }
 
+        isResolvingNearMe = false
         viewModel.generateForSelectedCategory()
 
         snackbarHostState.showSnackbar(
-            message = "Generating ${selected.toUiLabel()} near your current location.",
+            message = if (placeInfo.label.isNullOrBlank()) {
+                "Generating ${selected.toUiLabel()} near your current location."
+            } else {
+                "Generating ${selected.toUiLabel()} near ${placeInfo.label}."
+            },
             withDismissAction = true
         )
     }
@@ -149,7 +171,7 @@ fun SuggestionsScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    androidx.compose.foundation.layout.Column {
+                    Column {
                         Text("Suggestions", style = MaterialTheme.typography.titleLarge)
                         Text(
                             "${state.city.ifBlank { "—" }} • Pinned: ${state.pinnedCandidateIds.size}",
@@ -192,7 +214,7 @@ fun SuggestionsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        androidx.compose.foundation.layout.Column(modifier = Modifier.weight(1f)) {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 "Preferences • ${selected.toUiLabel()}",
                                 style = MaterialTheme.typography.titleMedium
@@ -237,7 +259,7 @@ fun SuggestionsScreen(
                 ) {
                     Button(
                         onClick = { runNormalGenerate() },
-                        enabled = !state.isLoading,
+                        enabled = !state.isLoading && !isResolvingNearMe,
                         modifier = Modifier.weight(1f)
                     ) {
                         Text("Generate ${selected.toUiLabel()}")
@@ -266,22 +288,58 @@ fun SuggestionsScreen(
                                 )
                             }
                         },
-                        enabled = !state.isLoading,
+                        enabled = !state.isLoading && !isResolvingNearMe,
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("Near me")
+                        Text(if (isResolvingNearMe) "Locating..." else "Near me")
                     }
 
                     OutlinedButton(
                         onClick = { viewModel.loadDemoSuggestions(state.city.ifBlank { "Paris" }) },
-                        enabled = !state.isLoading
+                        enabled = !state.isLoading && !isResolvingNearMe
                     ) {
                         Text("Demo")
                     }
                 }
             }
 
-            if (state.isLoading) {
+            if (nearMeResolvedLabel != null) {
+                item("near_me_status") {
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(
+                                "Near me active",
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                nearMeResolvedLabel.orEmpty(),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (nearMePromptPreview != null) {
+                item("near_me_prompt_preview") {
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(
+                                "Near me prompt",
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                nearMePromptPreview.orEmpty(),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (state.isLoading || isResolvingNearMe) {
                 item("loading") {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -295,7 +353,7 @@ fun SuggestionsScreen(
             state.errorMessage?.let { msg ->
                 item("error") {
                     Card(modifier = Modifier.fillMaxWidth()) {
-                        androidx.compose.foundation.layout.Column(Modifier.padding(12.dp)) {
+                        Column(Modifier.padding(12.dp)) {
                             Text("Oops", style = MaterialTheme.typography.titleSmall)
                             Spacer(Modifier.height(6.dp))
                             Text(msg, style = MaterialTheme.typography.bodyMedium)
@@ -312,7 +370,7 @@ fun SuggestionsScreen(
                     var debugExpanded by rememberSaveable { mutableStateOf(false) }
 
                     Card(modifier = Modifier.fillMaxWidth()) {
-                        androidx.compose.foundation.layout.Column(Modifier.padding(12.dp)) {
+                        Column(Modifier.padding(12.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -333,7 +391,7 @@ fun SuggestionsScreen(
                                 enter = expandVertically(),
                                 exit = shrinkVertically()
                             ) {
-                                androidx.compose.foundation.layout.Column {
+                                Column {
                                     Spacer(Modifier.height(8.dp))
                                     Text("First attempt:", style = MaterialTheme.typography.labelMedium)
                                     Text(first ?: "—", style = MaterialTheme.typography.bodySmall)
@@ -353,10 +411,10 @@ fun SuggestionsScreen(
                 }
             }
 
-            if (!state.isLoading && listForCategory.isEmpty() && state.errorMessage == null) {
+            if (!state.isLoading && !isResolvingNearMe && listForCategory.isEmpty() && state.errorMessage == null) {
                 item("empty") {
                     Card(modifier = Modifier.fillMaxWidth()) {
-                        androidx.compose.foundation.layout.Column(Modifier.padding(12.dp)) {
+                        Column(Modifier.padding(12.dp)) {
                             Text(
                                 "No ${selected.toUiLabel()} yet.",
                                 style = MaterialTheme.typography.titleSmall
@@ -446,7 +504,7 @@ private fun SwipeableSuggestionCard(
         enableDismissFromStartToEnd = true,
         backgroundContent = {
             Card(modifier = Modifier.fillMaxWidth()) {
-                androidx.compose.foundation.layout.Column(Modifier.padding(12.dp)) {
+                Column(Modifier.padding(12.dp)) {
                     val label = when (dismissState.targetValue) {
                         SwipeToDismissBoxValue.EndToStart -> "Pin"
                         SwipeToDismissBoxValue.StartToEnd -> "Delete"
@@ -464,7 +522,7 @@ private fun SwipeableSuggestionCard(
 @Composable
 private fun TipsCard(tips: List<String>) {
     Card(modifier = Modifier.fillMaxWidth()) {
-        androidx.compose.foundation.layout.Column(Modifier.padding(12.dp)) {
+        Column(Modifier.padding(12.dp)) {
             Text("Local tips", style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.height(8.dp))
             tips.take(3).forEach { tip ->
@@ -480,7 +538,7 @@ private fun CandidateCard(
     onOpenMaps: () -> Unit
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
-        androidx.compose.foundation.layout.Column(Modifier.padding(12.dp)) {
+        Column(Modifier.padding(12.dp)) {
             Text(candidate.name, style = MaterialTheme.typography.titleMedium)
 
             val sub = buildString {
@@ -561,6 +619,8 @@ private fun removeAutoNearMeBlock(existing: String): String {
 
 private fun buildNearMePrompt(
     location: Location,
+    placeLabel: String?,
+    exactAddress: String?,
     category: CategoryDto,
     city: String
 ): String {
@@ -568,18 +628,33 @@ private fun buildNearMePrompt(
     val lng = String.format(Locale.US, "%.5f", location.longitude)
 
     return buildString {
-        append("Use the user's current live location as a strong ranking signal for ")
+        append("Use the user's current live location as a strict local constraint for ")
         append(category.toUiLabel())
-        append(" suggestions in ")
+        append(" suggestions. ")
+
+        if (!placeLabel.isNullOrBlank()) {
+            append("The user is currently near ")
+            append(placeLabel)
+            append(". ")
+        }
+
+        if (!exactAddress.isNullOrBlank()) {
+            append("Approximate exact address or street-level location: ")
+            append(exactAddress)
+            append(". ")
+        }
+
+        append("The trip city may be ")
         append(city)
-        append(". ")
-        append("Prioritize places that are genuinely nearby right now, ideally walkable or a short hop away. ")
+        append(", but prioritize what is actually near the user right now. ")
+        append("Only recommend places that are realistically close, ideally within roughly 1 to 2 km or a short walk. ")
+        append("Avoid suggesting places from far-away neighborhoods or across the city. ")
+        append("If nearby options are limited, prefer fewer but truly local suggestions rather than broad city-wide suggestions. ")
         append("Current coordinates: ")
         append(lat)
         append(", ")
         append(lng)
-        append(". ")
-        append("Prefer local relevance and avoid sending the user across the city unless the nearby options are clearly worse.")
+        append(".")
     }
 }
 
@@ -604,9 +679,7 @@ private suspend fun getBestCurrentLocation(context: Context): Location? {
         }
 
         val providers = buildList {
-            if (fineGranted) {
-                add(LocationManager.GPS_PROVIDER)
-            }
+            if (fineGranted) add(LocationManager.GPS_PROVIDER)
             add(LocationManager.NETWORK_PROVIDER)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 add(LocationManager.FUSED_PROVIDER)
@@ -614,18 +687,30 @@ private suspend fun getBestCurrentLocation(context: Context): Location? {
             add(LocationManager.PASSIVE_PROVIDER)
         }.distinct()
 
+        val cached = providers
+            .mapNotNull { provider ->
+                runCatching { locationManager.getLastKnownLocation(provider) }.getOrNull()
+            }
+            .sortedWith(
+                compareBy<Location> { it.accuracy }
+                    .thenByDescending { it.time }
+            )
+            .firstOrNull()
+
+        if (cached != null) {
+            return@withContext cached
+        }
+
         for (provider in providers) {
-            val current = getCurrentLocationCompat(locationManager, provider)
+            val current = withTimeoutOrNull(2500) {
+                getCurrentLocationCompat(locationManager, provider)
+            }
             if (current != null) {
                 return@withContext current
             }
         }
 
-        providers
-            .mapNotNull { provider ->
-                runCatching { locationManager.getLastKnownLocation(provider) }.getOrNull()
-            }
-            .maxByOrNull { it.time }
+        null
     }
 }
 
@@ -660,3 +745,172 @@ private suspend fun getCurrentLocationCompat(
         runCatching { locationManager.getLastKnownLocation(provider) }.getOrNull()
     }
 }
+
+private suspend fun getBestPlaceInfo(
+    context: Context,
+    location: Location
+): PlaceInfo {
+    return withContext(Dispatchers.IO) {
+        if (!Geocoder.isPresent()) {
+            return@withContext PlaceInfo(
+                label = null,
+                exactAddress = null
+            )
+        }
+
+        val geocoder = Geocoder(context, Locale.getDefault())
+        val address = getAddressCompat(
+            geocoder = geocoder,
+            latitude = location.latitude,
+            longitude = location.longitude
+        ) ?: return@withContext PlaceInfo(
+            label = null,
+            exactAddress = null
+        )
+
+        val neighborhood = listOfNotNull(
+            address.subLocality?.normalizePlacePart(),
+            address.locality?.normalizePlacePart()
+        ).firstOrNull { it.isUsefulPlacePart() && !it.looksAdministrativeRegion() }
+
+        val city = listOfNotNull(
+            address.locality?.normalizePlacePart(),
+            address.adminArea?.normalizePlacePart(),
+            address.countryName?.normalizePlacePart()
+        ).firstOrNull {
+            it.isUsefulPlacePart() &&
+                    !it.equals(neighborhood, ignoreCase = true) &&
+                    !it.looksAdministrativeRegion()
+        }
+
+        val broadFallback = listOfNotNull(
+            address.subAdminArea?.normalizePlacePart(),
+            address.adminArea?.normalizePlacePart(),
+            address.countryName?.normalizePlacePart()
+        ).firstOrNull {
+            it.isUsefulPlacePart() &&
+                    !it.equals(neighborhood, ignoreCase = true) &&
+                    !it.equals(city, ignoreCase = true)
+        }
+
+        val label = when {
+            !neighborhood.isNullOrBlank() && !city.isNullOrBlank() -> "$neighborhood, $city"
+            !neighborhood.isNullOrBlank() -> neighborhood
+            !city.isNullOrBlank() -> city
+            !broadFallback.isNullOrBlank() -> broadFallback
+            else -> null
+        }
+
+        val exactAddress = buildExactAddress(address)
+
+        PlaceInfo(
+            label = label,
+            exactAddress = exactAddress
+        )
+    }
+}
+
+private suspend fun getAddressCompat(
+    geocoder: Geocoder,
+    latitude: Double,
+    longitude: Double
+): Address? {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        suspendCancellableCoroutine { continuation ->
+            runCatching {
+                geocoder.getFromLocation(
+                    latitude,
+                    longitude,
+                    1
+                ) { addresses ->
+                    if (continuation.isActive) {
+                        continuation.resume(addresses.firstOrNull())
+                    }
+                }
+            }.onFailure {
+                if (continuation.isActive) {
+                    continuation.resume(null)
+                }
+            }
+        }
+    } else {
+        runCatching {
+            geocoder.getFromLocation(latitude, longitude, 1)?.firstOrNull()
+        }.getOrNull()
+    }
+}
+
+private fun buildExactAddress(address: Address): String? {
+    val addressLine = runCatching { address.getAddressLine(0) }.getOrNull()
+        ?.normalizeAddressLine()
+        ?.takeIf { it.isUsefulExactAddress() }
+
+    if (!addressLine.isNullOrBlank()) {
+        return addressLine
+    }
+
+    return listOfNotNull(
+        address.thoroughfare?.normalizePlacePart(),
+        address.subLocality?.normalizePlacePart(),
+        address.locality?.normalizePlacePart(),
+        address.adminArea?.normalizePlacePart(),
+        address.countryName?.normalizePlacePart()
+    ).distinct().takeIf { it.isNotEmpty() }?.joinToString(", ")
+}
+
+private fun String.isUsefulPlacePart(): Boolean {
+    val trimmed = trim()
+    if (trimmed.isBlank()) return false
+    if (trimmed.length < 2) return false
+
+    val mostlyDigits = trimmed.count { it.isDigit() } >= trimmed.length / 2
+    if (mostlyDigits) return false
+
+    val startsWithNumber = trimmed.firstOrNull()?.isDigit() == true
+    if (startsWithNumber) return false
+
+    return true
+}
+
+private fun String.normalizePlacePart(): String {
+    return trim()
+        .replace(Regex("\\s+"), " ")
+        .removePrefix("Stadt ")
+        .removePrefix("District of ")
+        .removePrefix("Region ")
+        .trim()
+}
+
+private fun String.normalizeAddressLine(): String {
+    return trim()
+        .replace(Regex("\\s+"), " ")
+        .trim()
+}
+
+private fun String.looksAdministrativeRegion(): Boolean {
+    val value = lowercase(Locale.getDefault())
+    return value.contains("mittelland") ||
+            value.contains("district") ||
+            value.contains("county") ||
+            value.contains("canton") ||
+            value.contains("administrative") ||
+            value.contains("region")
+}
+
+private fun String.isUsefulExactAddress(): Boolean {
+    val trimmed = trim()
+    if (trimmed.isBlank()) return false
+    if (trimmed.length < 5) return false
+    return true
+}
+
+private fun formatCoordinates(location: Location): String {
+    val lat = String.format(Locale.US, "%.5f", location.latitude)
+    val lng = String.format(Locale.US, "%.5f", location.longitude)
+    return "$lat, $lng"
+}
+
+private data class PlaceInfo(
+    val label: String?,
+    val exactAddress: String?
+)
