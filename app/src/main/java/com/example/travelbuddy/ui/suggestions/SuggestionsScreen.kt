@@ -1,6 +1,14 @@
-// File: com/example/travelbuddy/ui/suggestions/SuggestionsScreen.kt
 package com.example.travelbuddy.ui.suggestions
 
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Context
+import android.location.Location
+import android.location.LocationManager
+import android.os.Build
+import android.os.CancellationSignal
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
@@ -26,6 +34,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
@@ -44,10 +53,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.example.travelbuddy.ai.dto.CandidateDto
 import com.example.travelbuddy.ai.dto.CategoryDto
+import com.example.travelbuddy.data.session.CategoryQuickPrefs
 import com.example.travelbuddy.util.MapsIntents
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import java.util.Locale
+import java.util.concurrent.Executor
+import java.util.function.Consumer
+import kotlin.coroutines.resume
+
+private const val AUTO_NEAR_ME_MARKER = "[AUTO_NEAR_ME]"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -57,16 +77,71 @@ fun SuggestionsScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
-
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-
     val selected = state.selectedCategory
     val quick = state.quickPrefsForSelected
     val listForCategory = state.suggestionsByCategory[selected].orEmpty()
-
     val listState = rememberLazyListState()
     var prefsExpanded by rememberSaveable(selected.name) { mutableStateOf(false) }
+
+    fun runNormalGenerate() {
+        viewModel.updateQuickPrefsForSelected { prefs ->
+            prefs.copy(extraText = removeAutoNearMeBlock(prefs.extraText))
+        }
+        viewModel.generateForSelectedCategory()
+    }
+
+    suspend fun runNearMeGenerate() {
+        val location = getBestCurrentLocation(context)
+        if (location == null) {
+            snackbarHostState.showSnackbar(
+                message = "Could not get your location. Try again outdoors or enable location services.",
+                withDismissAction = true
+            )
+            return
+        }
+
+        val nearMeText = buildNearMePrompt(
+            location = location,
+            category = selected,
+            city = state.city.ifBlank { "current city" }
+        )
+
+        viewModel.updateQuickPrefsForSelected { prefs ->
+            prefs.copy(
+                extraText = mergeAutoNearMeBlock(
+                    existing = prefs.extraText,
+                    nearMeBlock = nearMeText
+                )
+            )
+        }
+
+        viewModel.generateForSelectedCategory()
+
+        snackbarHostState.showSnackbar(
+            message = "Generating ${selected.toUiLabel()} near your current location.",
+            withDismissAction = true
+        )
+    }
+
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val granted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+
+        scope.launch {
+            if (granted) {
+                runNearMeGenerate()
+            } else {
+                snackbarHostState.showSnackbar(
+                    message = "Location permission is needed for Near me suggestions.",
+                    withDismissAction = true
+                )
+            }
+        }
+    }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -83,7 +158,9 @@ fun SuggestionsScreen(
                     }
                 },
                 actions = {
-                    TextButton(onClick = { viewModel.clearAllSuggestions() }) { Text("Clear all") }
+                    TextButton(onClick = { viewModel.clearAllSuggestions() }) {
+                        Text("Clear all")
+                    }
                 }
             )
         }
@@ -121,11 +198,15 @@ fun SuggestionsScreen(
                                 style = MaterialTheme.typography.titleMedium
                             )
                             Text(
-                                if (prefsExpanded) "Tweak and regenerate."
-                                else "Tap to expand. These stay per category.",
+                                if (prefsExpanded) {
+                                    "Tweak and regenerate."
+                                } else {
+                                    "Tap to expand. These stay per category."
+                                },
                                 style = MaterialTheme.typography.labelMedium
                             )
                         }
+
                         TextButton(onClick = { prefsExpanded = !prefsExpanded }) {
                             Text(if (prefsExpanded) "Collapse" else "Expand")
                         }
@@ -155,15 +236,48 @@ fun SuggestionsScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Button(
-                        onClick = { viewModel.generateForSelectedCategory() },
+                        onClick = { runNormalGenerate() },
                         enabled = !state.isLoading,
                         modifier = Modifier.weight(1f)
-                    ) { Text("Generate ${selected.toUiLabel()}") }
+                    ) {
+                        Text("Generate ${selected.toUiLabel()}")
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            val fineGranted = ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.ACCESS_FINE_LOCATION
+                            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+                            val coarseGranted = ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.ACCESS_COARSE_LOCATION
+                            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+                            if (fineGranted || coarseGranted) {
+                                scope.launch { runNearMeGenerate() }
+                            } else {
+                                locationPermissionLauncher.launch(
+                                    arrayOf(
+                                        Manifest.permission.ACCESS_FINE_LOCATION,
+                                        Manifest.permission.ACCESS_COARSE_LOCATION
+                                    )
+                                )
+                            }
+                        },
+                        enabled = !state.isLoading,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Near me")
+                    }
 
                     OutlinedButton(
                         onClick = { viewModel.loadDemoSuggestions(state.city.ifBlank { "Paris" }) },
                         enabled = !state.isLoading
-                    ) { Text("Demo") }
+                    ) {
+                        Text("Demo")
+                    }
                 }
             }
 
@@ -172,7 +286,9 @@ fun SuggestionsScreen(
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.Center
-                    ) { CircularProgressIndicator() }
+                    ) {
+                        CircularProgressIndicator()
+                    }
                 }
             }
 
@@ -190,6 +306,7 @@ fun SuggestionsScreen(
 
             val first = state.debugRawFirst
             val repaired = state.debugRawRepaired
+
             if (!first.isNullOrBlank() || !repaired.isNullOrBlank()) {
                 item("debug") {
                     var debugExpanded by rememberSaveable { mutableStateOf(false) }
@@ -205,6 +322,7 @@ fun SuggestionsScreen(
                                     "Debug: raw model output",
                                     style = MaterialTheme.typography.titleSmall
                                 )
+
                                 TextButton(onClick = { debugExpanded = !debugExpanded }) {
                                     Text(if (debugExpanded) "Hide" else "Show")
                                 }
@@ -230,18 +348,29 @@ fun SuggestionsScreen(
             }
 
             if (state.globalTips.isNotEmpty()) {
-                item("tips") { TipsCard(tips = state.globalTips) }
+                item("tips") {
+                    TipsCard(tips = state.globalTips)
+                }
             }
 
             if (!state.isLoading && listForCategory.isEmpty() && state.errorMessage == null) {
                 item("empty") {
                     Card(modifier = Modifier.fillMaxWidth()) {
                         androidx.compose.foundation.layout.Column(Modifier.padding(12.dp)) {
-                            Text("No ${selected.toUiLabel()} yet.", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                "No ${selected.toUiLabel()} yet.",
+                                style = MaterialTheme.typography.titleSmall
+                            )
                             Spacer(Modifier.height(6.dp))
-                            Text("Tap “Generate” to get ideas for this category.", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                "Tap “Generate” or “Near me” to get ideas for this category.",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
                             Spacer(Modifier.height(6.dp))
-                            Text("Swipe left to pin. Swipe right to delete.", style = MaterialTheme.typography.labelMedium)
+                            Text(
+                                "Swipe left to pin. Swipe right to delete.",
+                                style = MaterialTheme.typography.labelMedium
+                            )
                         }
                     }
                 }
@@ -257,7 +386,7 @@ fun SuggestionsScreen(
                                     actionLabel = "Undo",
                                     withDismissAction = true
                                 )
-                                if (res == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                                if (res == SnackbarResult.ActionPerformed) {
                                     viewModel.undoPin(cand)
                                 }
                             }
@@ -271,13 +400,15 @@ fun SuggestionsScreen(
                                         actionLabel = "Undo",
                                         withDismissAction = true
                                     )
-                                    if (res == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                                    if (res == SnackbarResult.ActionPerformed) {
                                         viewModel.undoDelete(removed)
                                     }
                                 }
                             }
                         },
-                        onOpenMaps = { MapsIntents.openLocationSearch(context, cand.location) }
+                        onOpenMaps = {
+                            MapsIntents.openLocationSearch(context, cand.location)
+                        }
                     )
                 }
             }
@@ -297,10 +428,12 @@ private fun SwipeableSuggestionCard(
         confirmValueChange = { value ->
             when (value) {
                 SwipeToDismissBoxValue.EndToStart -> {
-                    onPin(); true
+                    onPin()
+                    true
                 }
                 SwipeToDismissBoxValue.StartToEnd -> {
-                    onDelete(); true
+                    onDelete()
+                    true
                 }
                 else -> false
             }
@@ -334,13 +467,18 @@ private fun TipsCard(tips: List<String>) {
         androidx.compose.foundation.layout.Column(Modifier.padding(12.dp)) {
             Text("Local tips", style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.height(8.dp))
-            tips.take(3).forEach { tip -> Text("• $tip", style = MaterialTheme.typography.bodyMedium) }
+            tips.take(3).forEach { tip ->
+                Text("• $tip", style = MaterialTheme.typography.bodyMedium)
+            }
         }
     }
 }
 
 @Composable
-private fun CandidateCard(candidate: CandidateDto, onOpenMaps: () -> Unit) {
+private fun CandidateCard(
+    candidate: CandidateDto,
+    onOpenMaps: () -> Unit
+) {
     Card(modifier = Modifier.fillMaxWidth()) {
         androidx.compose.foundation.layout.Column(Modifier.padding(12.dp)) {
             Text(candidate.name, style = MaterialTheme.typography.titleMedium)
@@ -351,13 +489,15 @@ private fun CandidateCard(candidate: CandidateDto, onOpenMaps: () -> Unit) {
                 append("${candidate.durationMin}min")
                 candidate.costTier?.let { append(" • €".repeat(it.coerceIn(1, 3))) }
             }
-            Text(sub, style = MaterialTheme.typography.labelMedium)
 
+            Text(sub, style = MaterialTheme.typography.labelMedium)
             Spacer(Modifier.height(6.dp))
             Text(candidate.pitch, style = MaterialTheme.typography.bodyMedium)
-
             Spacer(Modifier.height(10.dp))
-            OutlinedButton(onClick = onOpenMaps) { Text("Open in Maps") }
+
+            OutlinedButton(onClick = onOpenMaps) {
+                Text("Open in Maps")
+            }
         }
     }
 }
@@ -368,6 +508,7 @@ private fun CategoryChipsRow(
     onSelect: (CategoryDto) -> Unit
 ) {
     val all = CategoryDto.values().toList()
+
     LazyRow(
         modifier = Modifier.fillMaxWidth(),
         contentPadding = PaddingValues(horizontal = 2.dp),
@@ -392,4 +533,130 @@ fun CategoryDto.toUiLabel(): String = when (this) {
     CategoryDto.MUSEUMS -> "Museums"
     CategoryDto.EXPERIENCE -> "Experiences"
     CategoryDto.OTHER -> "Other"
+}
+
+private fun mergeAutoNearMeBlock(
+    existing: String,
+    nearMeBlock: String
+): String {
+    val cleaned = removeAutoNearMeBlock(existing).trim()
+    return buildString {
+        if (cleaned.isNotBlank()) {
+            append(cleaned)
+            append("\n\n")
+        }
+        append(AUTO_NEAR_ME_MARKER)
+        append(" ")
+        append(nearMeBlock.trim())
+    }.trim()
+}
+
+private fun removeAutoNearMeBlock(existing: String): String {
+    return existing
+        .lineSequence()
+        .filterNot { it.trim().startsWith(AUTO_NEAR_ME_MARKER) }
+        .joinToString("\n")
+        .trim()
+}
+
+private fun buildNearMePrompt(
+    location: Location,
+    category: CategoryDto,
+    city: String
+): String {
+    val lat = String.format(Locale.US, "%.5f", location.latitude)
+    val lng = String.format(Locale.US, "%.5f", location.longitude)
+
+    return buildString {
+        append("Use the user's current live location as a strong ranking signal for ")
+        append(category.toUiLabel())
+        append(" suggestions in ")
+        append(city)
+        append(". ")
+        append("Prioritize places that are genuinely nearby right now, ideally walkable or a short hop away. ")
+        append("Current coordinates: ")
+        append(lat)
+        append(", ")
+        append(lng)
+        append(". ")
+        append("Prefer local relevance and avoid sending the user across the city unless the nearby options are clearly worse.")
+    }
+}
+
+@SuppressLint("MissingPermission")
+private suspend fun getBestCurrentLocation(context: Context): Location? {
+    return withContext(Dispatchers.IO) {
+        val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+            ?: return@withContext null
+
+        val fineGranted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+        val coarseGranted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+        if (!fineGranted && !coarseGranted) {
+            return@withContext null
+        }
+
+        val providers = buildList {
+            if (fineGranted) {
+                add(LocationManager.GPS_PROVIDER)
+            }
+            add(LocationManager.NETWORK_PROVIDER)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                add(LocationManager.FUSED_PROVIDER)
+            }
+            add(LocationManager.PASSIVE_PROVIDER)
+        }.distinct()
+
+        for (provider in providers) {
+            val current = getCurrentLocationCompat(locationManager, provider)
+            if (current != null) {
+                return@withContext current
+            }
+        }
+
+        providers
+            .mapNotNull { provider ->
+                runCatching { locationManager.getLastKnownLocation(provider) }.getOrNull()
+            }
+            .maxByOrNull { it.time }
+    }
+}
+
+@SuppressLint("MissingPermission")
+private suspend fun getCurrentLocationCompat(
+    locationManager: LocationManager,
+    provider: String
+): Location? {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        suspendCancellableCoroutine { continuation ->
+            val cancellationSignal = CancellationSignal()
+            continuation.invokeOnCancellation { cancellationSignal.cancel() }
+
+            runCatching {
+                locationManager.getCurrentLocation(
+                    provider,
+                    cancellationSignal,
+                    Executor { runnable -> runnable.run() },
+                    Consumer<Location?> { location ->
+                        if (continuation.isActive) {
+                            continuation.resume(location)
+                        }
+                    }
+                )
+            }.onFailure {
+                if (continuation.isActive) {
+                    continuation.resume(null)
+                }
+            }
+        }
+    } else {
+        runCatching { locationManager.getLastKnownLocation(provider) }.getOrNull()
+    }
 }
