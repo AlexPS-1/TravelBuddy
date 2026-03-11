@@ -37,7 +37,12 @@ data class PlanUiState(
     val selectedDay: PlanDayUi? = null,
     val scheduledItems: List<ScheduledPlanItemUi> = emptyList(),
     val optionItems: List<PlanBlock> = emptyList(),
-    val allBlocks: List<PlanBlock> = emptyList()
+    val allBlocks: List<PlanBlock> = emptyList(),
+    val scheduledCount: Int = 0,
+    val optionCount: Int = 0,
+    val totalScheduledMinutes: Int = 0,
+    val firstScheduledStart: String? = null,
+    val lastScheduledEnd: String? = null
 )
 
 class PlanViewModel(
@@ -58,13 +63,20 @@ class PlanViewModel(
                 .filter { it.timingType == PlanTimingType.FIXED }
                 .sortedBy { it.startTime ?: "99:99" }
 
+            val scheduledTimeline = buildScheduledTimeline(scheduledBlocks)
+
             PlanUiState(
                 days = days,
                 selectedDayIndex = safeSelectedDay,
                 selectedDay = days.getOrNull(safeSelectedDay),
-                scheduledItems = buildScheduledTimeline(scheduledBlocks),
+                scheduledItems = scheduledTimeline,
                 optionItems = dayBlocks.filter { it.timingType == PlanTimingType.OPTION },
-                allBlocks = blocks
+                allBlocks = blocks,
+                scheduledCount = scheduledTimeline.size,
+                optionCount = dayBlocks.count { it.timingType == PlanTimingType.OPTION },
+                totalScheduledMinutes = scheduledTimeline.sumOf { it.block.durationMin },
+                firstScheduledStart = scheduledTimeline.firstOrNull()?.block?.startTime,
+                lastScheduledEnd = scheduledTimeline.lastOrNull()?.endTime
             )
         }.stateIn(
             scope = viewModelScope,
@@ -261,7 +273,7 @@ class PlanViewModel(
             val warnings = mutableListOf<String>()
 
             if (current.start == null) {
-                warnings += "Invalid or missing start time."
+                warnings += "Invalid or missing start time"
             }
 
             val previous = parsed.getOrNull(index - 1)
@@ -271,7 +283,7 @@ class PlanViewModel(
                 current.start != null &&
                 current.start.isBefore(previous.start)
             ) {
-                warnings += "Starts before the previous scheduled item."
+                warnings += "Starts before the previous item"
             }
 
             if (
@@ -279,7 +291,7 @@ class PlanViewModel(
                 current.start != null &&
                 current.start.isBefore(previous.end)
             ) {
-                warnings += "Overlaps with the previous item."
+                warnings += "Overlaps the previous item"
             }
 
             val next = parsed.getOrNull(index + 1)
@@ -288,7 +300,7 @@ class PlanViewModel(
                 next?.start != null &&
                 current.end.isAfter(next.start)
             ) {
-                warnings += "Overlaps with the next item."
+                warnings += "Overlaps the next item"
             }
 
             ScheduledPlanItemUi(
