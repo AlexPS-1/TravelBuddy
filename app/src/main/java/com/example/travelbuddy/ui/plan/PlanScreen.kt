@@ -1,29 +1,25 @@
 package com.example.travelbuddy.ui.plan
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -43,10 +39,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import com.example.travelbuddy.ai.dto.CandidateDto
 import com.example.travelbuddy.model.plan.PlanBlock
 import com.example.travelbuddy.model.plan.PlanItemSource
-import com.example.travelbuddy.model.plan.PlanTimingType
 import com.example.travelbuddy.ui.suggestions.SuggestionsViewModel
 
 @Composable
@@ -60,6 +57,8 @@ fun PlanScreen(
     val pinned = suggestionsState.pinnedCandidates
 
     var addExpanded by remember { mutableStateOf(false) }
+    var pinnedExpanded by remember { mutableStateOf(false) }
+
     var fixedTitle by remember { mutableStateOf("") }
     var fixedTime by remember { mutableStateOf("10:00") }
     var fixedDuration by remember { mutableIntStateOf(60) }
@@ -113,7 +112,9 @@ fun PlanScreen(
         if (pinned.isNotEmpty()) {
             item {
                 PinnedSection(
-                    pinned = pinned.take(6),
+                    pinned = pinned,
+                    expanded = pinnedExpanded,
+                    onExpandToggle = { pinnedExpanded = !pinnedExpanded },
                     pinnedFixedTimes = pinnedFixedTimes,
                     onAddFixed = { candidate, time ->
                         planViewModel.addPinnedAsFixed(candidate, time)
@@ -170,6 +171,33 @@ fun PlanScreen(
                     },
                     canMoveUp = index > 0,
                     canMoveDown = index < uiState.scheduledItems.lastIndex
+                )
+            }
+        }
+
+        if (uiState.gapItems.isNotEmpty() && uiState.optionItems.isNotEmpty()) {
+            item {
+                SectionHeader(
+                    title = "Open windows",
+                    subtitle = "Promote options directly into realistic free slots"
+                )
+            }
+
+            itemsIndexed(
+                items = uiState.gapItems,
+                key = { index, gap -> "${gap.startTime}-${gap.endTime}-$index" }
+            ) { _, gap ->
+                GapRecommendationCard(
+                    gap = gap,
+                    options = uiState.optionItems
+                        .filter { it.durationMin <= gap.availableMinutes }
+                        .take(3),
+                    onScheduleOption = { blockId ->
+                        planViewModel.convertOptionToScheduled(
+                            blockId = blockId,
+                            startTime = gap.startTime
+                        )
+                    }
                 )
             }
         }
@@ -260,13 +288,13 @@ private fun DayHeaderCard(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    OutlinedButton(
+                    TextButton(
                         onClick = onPreviousDay,
                         enabled = uiState.selectedDayIndex > 0
                     ) {
                         Text("Prev")
                     }
-                    OutlinedButton(
+                    TextButton(
                         onClick = onNextDay,
                         enabled = uiState.selectedDayIndex < uiState.days.lastIndex
                     ) {
@@ -295,14 +323,14 @@ private fun DayHeaderCard(
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
+                TextButton(
                     onClick = onClearDay,
                     enabled = uiState.scheduledItems.isNotEmpty() || uiState.optionItems.isNotEmpty()
                 ) {
                     Text("Clear day")
                 }
 
-                OutlinedButton(
+                TextButton(
                     onClick = onClearAll,
                     enabled = uiState.allBlocks.isNotEmpty()
                 ) {
@@ -319,12 +347,10 @@ private fun DayChipsRow(
     selectedDayIndex: Int,
     onSelectDay: (Int) -> Unit
 ) {
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(max = 0.dp)
-    ) { }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(
+        modifier = Modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
         days.forEach { day ->
             FilterChip(
                 selected = day.index == selectedDayIndex,
@@ -345,8 +371,7 @@ private fun SummaryChip(label: String) {
     AssistChip(
         onClick = {},
         label = { Text(label) },
-        enabled = false,
-        colors = AssistChipDefaults.assistChipColors()
+        enabled = false
     )
 }
 
@@ -429,6 +454,8 @@ private fun AddScheduledCard(
 @Composable
 private fun PinnedSection(
     pinned: List<CandidateDto>,
+    expanded: Boolean,
+    onExpandToggle: () -> Unit,
     pinnedFixedTimes: SnapshotStateMap<String, String>,
     onAddFixed: (CandidateDto, String) -> Unit,
     onAddOption: (CandidateDto) -> Unit
@@ -438,62 +465,83 @@ private fun PinnedSection(
             modifier = Modifier.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            SectionHeader(
-                title = "Pinned places",
-                subtitle = "Add them as fixed plans or keep them as options"
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Pinned places",
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                    Text(
+                        text = if (expanded) {
+                            "Add them as fixed plans or keep them as options"
+                        } else {
+                            "${pinned.size} pinned places hidden"
+                        },
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
 
-            pinned.forEach { candidate ->
-                val timeValue = pinnedFixedTimes[candidate.candidateId] ?: "20:00"
+                TextButton(onClick = onExpandToggle) {
+                    Text(if (expanded) "Hide" else "Show")
+                }
+            }
 
-                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(
-                            text = candidate.name,
-                            style = MaterialTheme.typography.titleSmall
-                        )
+            if (expanded) {
+                pinned.forEach { candidate ->
+                    val timeValue = pinnedFixedTimes[candidate.candidateId] ?: "20:00"
 
-                        candidate.pitch?.let {
+                    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
                             Text(
-                                text = it,
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            candidate.location.areaHint?.let { SummaryChip(label = it) }
-                            SummaryChip(label = "${candidate.durationMin} min")
-                        }
-
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            OutlinedTextField(
-                                value = timeValue,
-                                onValueChange = { pinnedFixedTimes[candidate.candidateId] = it },
-                                label = { Text("Time") },
-                                modifier = Modifier.weight(1f)
+                                text = candidate.name,
+                                style = MaterialTheme.typography.titleSmall
                             )
 
-                            Button(
-                                onClick = { onAddFixed(candidate, timeValue) },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("Schedule")
+                            candidate.pitch?.let {
+                                Text(
+                                    text = it,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
-                        }
 
-                        TextButton(
-                            onClick = { onAddOption(candidate) },
-                            modifier = Modifier.align(Alignment.End)
-                        ) {
-                            Text("Add as option")
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                candidate.location.areaHint?.let { SummaryChip(label = it) }
+                                SummaryChip(label = "${candidate.durationMin} min")
+                            }
+
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedTextField(
+                                    value = timeValue,
+                                    onValueChange = { pinnedFixedTimes[candidate.candidateId] = it },
+                                    label = { Text("Time") },
+                                    modifier = Modifier.weight(1f)
+                                )
+
+                                Button(
+                                    onClick = { onAddFixed(candidate, timeValue) },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Schedule")
+                                }
+                            }
+
+                            TextButton(
+                                onClick = { onAddOption(candidate) },
+                                modifier = Modifier.align(Alignment.End)
+                            ) {
+                                Text("Add as option")
+                            }
                         }
                     }
                 }
@@ -584,11 +632,13 @@ private fun ScheduledTimelineCard(
                             style = MaterialTheme.typography.titleMedium
                         )
 
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            MetaChip(label = block.source.toUiLabel())
-                            MetaChip(label = "${block.durationMin} min")
-                            block.location?.areaHint?.let { MetaChip(label = it) }
-                        }
+                        MetaChipRow(
+                            labels = buildList {
+                                add(block.source.toUiLabel())
+                                add("${block.durationMin} min")
+                                block.location?.areaHint?.let { add(it) }
+                            }
+                        )
                     }
 
                     TextButton(onClick = { expanded = !expanded }) {
@@ -723,6 +773,65 @@ private fun TimelineRail(
 }
 
 @Composable
+private fun GapRecommendationCard(
+    gap: ScheduleGapUi,
+    options: List<PlanBlock>,
+    onScheduleOption: (String) -> Unit
+) {
+    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = "${gap.startTime} → ${gap.endTime}",
+                style = MaterialTheme.typography.titleMedium
+            )
+
+            Text(
+                text = "${formatMinutes(gap.availableMinutes)} free",
+                style = MaterialTheme.typography.bodyMedium
+            )
+
+            if (options.isEmpty()) {
+                Text(
+                    text = "No current option fits this slot.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            } else {
+                options.forEach { option ->
+                    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = option.title,
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Text(
+                                    text = "${option.durationMin} min",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+
+                            TextButton(
+                                onClick = { onScheduleOption(option.id) }
+                            ) {
+                                Text("Use ${gap.startTime}")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun OptionPlannerCard(
     block: PlanBlock,
     onUp: () -> Unit,
@@ -754,12 +863,14 @@ private fun OptionPlannerCard(
                         style = MaterialTheme.typography.titleMedium
                     )
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        MetaChip(label = "Option")
-                        MetaChip(label = block.source.toUiLabel())
-                        MetaChip(label = "${block.durationMin} min")
-                        block.location?.areaHint?.let { MetaChip(label = it) }
-                    }
+                    MetaChipRow(
+                        labels = buildList {
+                            add("Option")
+                            add(block.source.toUiLabel())
+                            add("${block.durationMin} min")
+                            block.location?.areaHint?.let { add(it) }
+                        }
+                    )
                 }
 
                 TextButton(onClick = { expanded = !expanded }) {
@@ -905,13 +1016,21 @@ private fun WarningStrip(warnings: List<String>) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun MetaChip(label: String) {
-    AssistChip(
-        onClick = {},
-        label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-        enabled = false
-    )
+private fun MetaChipRow(labels: List<String>) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        labels.forEach { label ->
+            AssistChip(
+                onClick = {},
+                label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                enabled = false
+            )
+        }
+    }
 }
 
 private fun PlanItemSource.toUiLabel(): String {

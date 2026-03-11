@@ -31,12 +31,19 @@ data class ScheduledPlanItemUi(
     val warnings: List<String>
 )
 
+data class ScheduleGapUi(
+    val startTime: String,
+    val endTime: String,
+    val availableMinutes: Int
+)
+
 data class PlanUiState(
     val days: List<PlanDayUi> = emptyList(),
     val selectedDayIndex: Int = 0,
     val selectedDay: PlanDayUi? = null,
     val scheduledItems: List<ScheduledPlanItemUi> = emptyList(),
     val optionItems: List<PlanBlock> = emptyList(),
+    val gapItems: List<ScheduleGapUi> = emptyList(),
     val allBlocks: List<PlanBlock> = emptyList(),
     val scheduledCount: Int = 0,
     val optionCount: Int = 0,
@@ -71,6 +78,7 @@ class PlanViewModel(
                 selectedDay = days.getOrNull(safeSelectedDay),
                 scheduledItems = scheduledTimeline,
                 optionItems = dayBlocks.filter { it.timingType == PlanTimingType.OPTION },
+                gapItems = buildGapItems(scheduledTimeline),
                 allBlocks = blocks,
                 scheduledCount = scheduledTimeline.size,
                 optionCount = dayBlocks.count { it.timingType == PlanTimingType.OPTION },
@@ -309,6 +317,36 @@ class PlanViewModel(
                 warnings = warnings.distinct()
             )
         }
+    }
+
+    private fun buildGapItems(
+        scheduledItems: List<ScheduledPlanItemUi>
+    ): List<ScheduleGapUi> {
+        if (scheduledItems.size < 2) return emptyList()
+
+        val gaps = mutableListOf<ScheduleGapUi>()
+
+        for (index in 0 until scheduledItems.lastIndex) {
+            val current = scheduledItems[index]
+            val next = scheduledItems[index + 1]
+
+            val currentEnd = parseTime(current.endTime)
+            val nextStart = parseTime(next.block.startTime)
+
+            if (currentEnd == null || nextStart == null) continue
+            if (!currentEnd.isBefore(nextStart)) continue
+
+            val minutes = java.time.Duration.between(currentEnd, nextStart).toMinutes().toInt()
+            if (minutes <= 0) continue
+
+            gaps += ScheduleGapUi(
+                startTime = currentEnd.format(TIME_FORMATTER),
+                endTime = nextStart.format(TIME_FORMATTER),
+                availableMinutes = minutes
+            )
+        }
+
+        return gaps
     }
 
     private fun parseTime(value: String?): LocalTime? {
