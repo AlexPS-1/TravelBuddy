@@ -93,21 +93,6 @@ class PlanViewModel(
         )
     }
 
-    fun addCustomOptionItem(title: String, durationMin: Int, notes: String) {
-        session.addBlock(
-            PlanBlock(
-                dayIndex = selectedDayIndex.value,
-                source = PlanItemSource.USER,
-                timingType = PlanTimingType.OPTION,
-                title = title.ifBlank { "Possible activity" },
-                category = CategoryDto.OTHER,
-                startTime = null,
-                durationMin = durationMin.coerceIn(10, 360),
-                notes = notes.ifBlank { null }
-            )
-        )
-    }
-
     fun addPinnedAsFixed(candidate: CandidateDto, startTime: String) {
         session.addBlock(
             PlanBlock(
@@ -136,6 +121,66 @@ class PlanViewModel(
                 durationMin = candidate.durationMin.coerceIn(10, 360),
                 location = candidate.location,
                 notes = candidate.pitch
+            )
+        )
+    }
+
+    fun updateScheduledItem(
+        blockId: String,
+        title: String,
+        startTime: String,
+        durationMin: Int,
+        notes: String
+    ) {
+        val existing = session.planBlocks.value.firstOrNull { it.id == blockId } ?: return
+        session.updateBlock(
+            existing.copy(
+                title = title.ifBlank { existing.title },
+                startTime = normalizeTime(startTime),
+                durationMin = durationMin.coerceIn(10, 360),
+                notes = notes.ifBlank { null },
+                timingType = PlanTimingType.FIXED
+            )
+        )
+    }
+
+    fun updateOptionItem(
+        blockId: String,
+        title: String,
+        durationMin: Int,
+        notes: String
+    ) {
+        val existing = session.planBlocks.value.firstOrNull { it.id == blockId } ?: return
+        session.updateBlock(
+            existing.copy(
+                title = title.ifBlank { existing.title },
+                startTime = null,
+                durationMin = durationMin.coerceIn(10, 360),
+                notes = notes.ifBlank { null },
+                timingType = PlanTimingType.OPTION
+            )
+        )
+    }
+
+    fun convertOptionToScheduled(
+        blockId: String,
+        startTime: String
+    ) {
+        val existing = session.planBlocks.value.firstOrNull { it.id == blockId } ?: return
+        session.updateBlock(
+            existing.copy(
+                timingType = PlanTimingType.FIXED,
+                startTime = normalizeTime(startTime)
+            )
+        )
+    }
+
+    fun convertScheduledToOption(blockId: String) {
+        val existing = session.planBlocks.value.firstOrNull { it.id == blockId } ?: return
+        session.updateBlock(
+            existing.copy(
+                timingType = PlanTimingType.OPTION,
+                startTime = null
             )
         )
     }

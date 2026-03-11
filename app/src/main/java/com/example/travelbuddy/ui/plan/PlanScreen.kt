@@ -2,8 +2,8 @@ package com.example.travelbuddy.ui.plan
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -185,12 +185,8 @@ fun PlanScreen(
                                 candidate = candidate,
                                 fixedTime = timeValue,
                                 onFixedTimeChange = { pinnedFixedTimes[candidate.candidateId] = it },
-                                onAddFixed = {
-                                    planViewModel.addPinnedAsFixed(candidate, timeValue)
-                                },
-                                onAddOption = {
-                                    planViewModel.addPinnedAsOption(candidate)
-                                }
+                                onAddFixed = { planViewModel.addPinnedAsFixed(candidate, timeValue) },
+                                onAddOption = { planViewModel.addPinnedAsOption(candidate) }
                             )
                         }
                     }
@@ -211,22 +207,28 @@ fun PlanScreen(
 
         if (uiState.scheduledItems.isEmpty()) {
             item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Text("No scheduled items yet.", style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
+                EmptySectionCard(text = "No scheduled items yet.")
             }
         } else {
             itemsIndexed(
                 items = uiState.scheduledItems,
                 key = { _, block -> block.id }
             ) { index, block ->
-                BlockCard(
+                ScheduledBlockCard(
                     block = block,
                     onUp = { planViewModel.moveScheduledUp(block.id) },
                     onDown = { planViewModel.moveScheduledDown(block.id) },
                     onRemove = { planViewModel.remove(block.id) },
+                    onSave = { title, time, duration, notes ->
+                        planViewModel.updateScheduledItem(
+                            blockId = block.id,
+                            title = title,
+                            startTime = time,
+                            durationMin = duration,
+                            notes = notes
+                        )
+                    },
+                    onConvertToOption = { planViewModel.convertScheduledToOption(block.id) },
                     canMoveUp = index > 0,
                     canMoveDown = index < uiState.scheduledItems.lastIndex
                 )
@@ -239,30 +241,36 @@ fun PlanScreen(
 
         if (uiState.optionItems.isEmpty()) {
             item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Text("No options yet.", style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
+                EmptySectionCard(text = "No options yet.")
             }
         } else {
             itemsIndexed(
                 items = uiState.optionItems,
                 key = { _, block -> block.id }
             ) { index, block ->
-                BlockCard(
+                OptionBlockCard(
                     block = block,
                     onUp = { planViewModel.moveOptionUp(block.id) },
                     onDown = { planViewModel.moveOptionDown(block.id) },
                     onRemove = { planViewModel.remove(block.id) },
+                    onSave = { title, duration, notes ->
+                        planViewModel.updateOptionItem(
+                            blockId = block.id,
+                            title = title,
+                            durationMin = duration,
+                            notes = notes
+                        )
+                    },
+                    onConvertToScheduled = { time ->
+                        planViewModel.convertOptionToScheduled(
+                            blockId = block.id,
+                            startTime = time
+                        )
+                    },
                     canMoveUp = index > 0,
                     canMoveDown = index < uiState.optionItems.lastIndex
                 )
             }
-        }
-
-        item {
-            Spacer(modifier = Modifier.padding(bottom = 12.dp))
         }
     }
 }
@@ -320,13 +328,255 @@ private fun CandidatePlannerRow(
 }
 
 @Composable
-private fun BlockCard(
+private fun EmptySectionCard(text: String) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(text, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+@Composable
+private fun ScheduledBlockCard(
     block: PlanBlock,
     onUp: () -> Unit,
     onDown: () -> Unit,
     onRemove: () -> Unit,
+    onSave: (String, String, Int, String) -> Unit,
+    onConvertToOption: () -> Unit,
     canMoveUp: Boolean,
     canMoveDown: Boolean
+) {
+    var isEditing by remember(block.id) { mutableStateOf(false) }
+    var title by remember(block.id, block.title) { mutableStateOf(block.title) }
+    var time by remember(block.id, block.startTime) { mutableStateOf(block.startTime ?: "10:00") }
+    var durationText by remember(block.id, block.durationMin) { mutableStateOf(block.durationMin.toString()) }
+    var notes by remember(block.id, block.notes) { mutableStateOf(block.notes.orEmpty()) }
+
+    BlockCardFrame(
+        block = block,
+        canMoveUp = canMoveUp,
+        canMoveDown = canMoveDown,
+        onUp = onUp,
+        onDown = onDown,
+        onRemove = onRemove
+    ) {
+        if (!isEditing) {
+            OutlinedButton(
+                onClick = { isEditing = true },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Edit")
+            }
+
+            OutlinedButton(
+                onClick = onConvertToOption,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Move to options")
+            }
+        } else {
+            OutlinedTextField(
+                value = title,
+                onValueChange = { title = it },
+                label = { Text("Title") },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = time,
+                    onValueChange = { time = it },
+                    label = { Text("Time") },
+                    modifier = Modifier.weight(1f)
+                )
+
+                OutlinedTextField(
+                    value = durationText,
+                    onValueChange = { durationText = it },
+                    label = { Text("Min") },
+                    modifier = Modifier.weight(0.8f)
+                )
+            }
+
+            OutlinedTextField(
+                value = notes,
+                onValueChange = { notes = it },
+                label = { Text("Notes") },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Button(
+                onClick = {
+                    onSave(
+                        title,
+                        time,
+                        durationText.toIntOrNull() ?: block.durationMin,
+                        notes
+                    )
+                    isEditing = false
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Save changes")
+            }
+
+            OutlinedButton(
+                onClick = {
+                    title = block.title
+                    time = block.startTime ?: "10:00"
+                    durationText = block.durationMin.toString()
+                    notes = block.notes.orEmpty()
+                    isEditing = false
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Cancel")
+            }
+
+            OutlinedButton(
+                onClick = onConvertToOption,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Move to options")
+            }
+        }
+    }
+}
+
+@Composable
+private fun OptionBlockCard(
+    block: PlanBlock,
+    onUp: () -> Unit,
+    onDown: () -> Unit,
+    onRemove: () -> Unit,
+    onSave: (String, Int, String) -> Unit,
+    onConvertToScheduled: (String) -> Unit,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean
+) {
+    var isEditing by remember(block.id) { mutableStateOf(false) }
+    var title by remember(block.id, block.title) { mutableStateOf(block.title) }
+    var durationText by remember(block.id, block.durationMin) { mutableStateOf(block.durationMin.toString()) }
+    var notes by remember(block.id, block.notes) { mutableStateOf(block.notes.orEmpty()) }
+    var convertTime by remember(block.id) { mutableStateOf("20:00") }
+
+    BlockCardFrame(
+        block = block,
+        canMoveUp = canMoveUp,
+        canMoveDown = canMoveDown,
+        onUp = onUp,
+        onDown = onDown,
+        onRemove = onRemove
+    ) {
+        if (!isEditing) {
+            OutlinedButton(
+                onClick = { isEditing = true },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Edit")
+            }
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = convertTime,
+                    onValueChange = { convertTime = it },
+                    label = { Text("Time") },
+                    modifier = Modifier.weight(1f)
+                )
+
+                OutlinedButton(
+                    onClick = { onConvertToScheduled(convertTime) },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Schedule it")
+                }
+            }
+        } else {
+            OutlinedTextField(
+                value = title,
+                onValueChange = { title = it },
+                label = { Text("Title") },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            OutlinedTextField(
+                value = durationText,
+                onValueChange = { durationText = it },
+                label = { Text("Min") },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            OutlinedTextField(
+                value = notes,
+                onValueChange = { notes = it },
+                label = { Text("Notes") },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Button(
+                onClick = {
+                    onSave(
+                        title,
+                        durationText.toIntOrNull() ?: block.durationMin,
+                        notes
+                    )
+                    isEditing = false
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Save changes")
+            }
+
+            OutlinedButton(
+                onClick = {
+                    title = block.title
+                    durationText = block.durationMin.toString()
+                    notes = block.notes.orEmpty()
+                    isEditing = false
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Cancel")
+            }
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = convertTime,
+                    onValueChange = { convertTime = it },
+                    label = { Text("Time") },
+                    modifier = Modifier.weight(1f)
+                )
+
+                OutlinedButton(
+                    onClick = { onConvertToScheduled(convertTime) },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Schedule it")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BlockCardFrame(
+    block: PlanBlock,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onUp: () -> Unit,
+    onDown: () -> Unit,
+    onRemove: () -> Unit,
+    extraContent: @Composable ColumnScope.() -> Unit
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -382,6 +632,8 @@ private fun BlockCard(
                     Text("Remove")
                 }
             }
+
+            extraContent()
         }
     }
 }

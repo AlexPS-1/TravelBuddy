@@ -146,56 +146,15 @@ class TripSession {
     }
 
     fun addBlock(block: PlanBlock) {
+        _planBlocks.value = insertBlock(_planBlocks.value, block)
+    }
+
+    fun updateBlock(updatedBlock: PlanBlock) {
         val current = _planBlocks.value
-        val dayItems = current.filter { it.dayIndex == block.dayIndex }
+        if (current.none { it.id == updatedBlock.id }) return
 
-        val insertIndex = when (block.timingType) {
-            PlanTimingType.FIXED -> {
-                val fixedIndices = current.withIndex()
-                    .filter { it.value.dayIndex == block.dayIndex && it.value.timingType == PlanTimingType.FIXED }
-                    .map { it.index }
-
-                if (fixedIndices.isEmpty()) {
-                    current.indexOfFirst { it.dayIndex == block.dayIndex && it.timingType == PlanTimingType.OPTION }
-                        .takeIf { it >= 0 }
-                        ?: current.indexOfFirst { it.dayIndex > block.dayIndex }
-                            .takeIf { it >= 0 }
-                        ?: current.size
-                } else {
-                    val sameDayFixed = dayItems
-                        .filter { it.timingType == PlanTimingType.FIXED }
-                        .sortedBy { it.startTime ?: "99:99" }
-
-                    val newOrder = (sameDayFixed + block).sortedBy { it.startTime ?: "99:99" }
-                    val previousFixed = newOrder
-                        .takeWhile { it.id != block.id }
-                        .lastOrNull()
-
-                    if (previousFixed == null) {
-                        fixedIndices.first()
-                    } else {
-                        current.indexOfFirst { it.id == previousFixed.id } + 1
-                    }
-                }
-            }
-
-            PlanTimingType.OPTION -> {
-                val lastOptionIndex = current.indexOfLast {
-                    it.dayIndex == block.dayIndex && it.timingType == PlanTimingType.OPTION
-                }
-                if (lastOptionIndex >= 0) {
-                    lastOptionIndex + 1
-                } else {
-                    current.indexOfFirst { it.dayIndex > block.dayIndex }
-                        .takeIf { it >= 0 }
-                        ?: current.size
-                }
-            }
-        }
-
-        _planBlocks.value = current.toMutableList().apply {
-            add(insertIndex, block)
-        }.toList()
+        val withoutCurrent = current.filterNot { it.id == updatedBlock.id }
+        _planBlocks.value = insertBlock(withoutCurrent, updatedBlock)
     }
 
     fun removeBlock(blockId: String) {
@@ -264,6 +223,56 @@ class TripSession {
                 .thenBy { if (it.timingType == PlanTimingType.FIXED) 0 else 1 }
                 .thenBy { it.startTime ?: "99:99" }
         )
+    }
+
+    private fun insertBlock(current: List<PlanBlock>, block: PlanBlock): List<PlanBlock> {
+        val dayItems = current.filter { it.dayIndex == block.dayIndex }
+
+        val insertIndex = when (block.timingType) {
+            PlanTimingType.FIXED -> {
+                val fixedIndices = current.withIndex()
+                    .filter { it.value.dayIndex == block.dayIndex && it.value.timingType == PlanTimingType.FIXED }
+                    .map { it.index }
+
+                if (fixedIndices.isEmpty()) {
+                    current.indexOfFirst { it.dayIndex == block.dayIndex && it.timingType == PlanTimingType.OPTION }
+                        .takeIf { it >= 0 }
+                        ?: current.indexOfFirst { it.dayIndex > block.dayIndex }.takeIf { it >= 0 }
+                        ?: current.size
+                } else {
+                    val sameDayFixed = dayItems
+                        .filter { it.timingType == PlanTimingType.FIXED }
+                        .sortedBy { it.startTime ?: "99:99" }
+
+                    val newOrder = (sameDayFixed + block).sortedBy { it.startTime ?: "99:99" }
+                    val previousFixed = newOrder
+                        .takeWhile { it.id != block.id }
+                        .lastOrNull()
+
+                    if (previousFixed == null) {
+                        fixedIndices.first()
+                    } else {
+                        current.indexOfFirst { it.id == previousFixed.id } + 1
+                    }
+                }
+            }
+
+            PlanTimingType.OPTION -> {
+                val lastOptionIndex = current.indexOfLast {
+                    it.dayIndex == block.dayIndex && it.timingType == PlanTimingType.OPTION
+                }
+                if (lastOptionIndex >= 0) {
+                    lastOptionIndex + 1
+                } else {
+                    current.indexOfFirst { it.dayIndex > block.dayIndex }.takeIf { it >= 0 }
+                        ?: current.size
+                }
+            }
+        }
+
+        return current.toMutableList().apply {
+            add(insertIndex, block)
+        }.toList()
     }
 }
 
