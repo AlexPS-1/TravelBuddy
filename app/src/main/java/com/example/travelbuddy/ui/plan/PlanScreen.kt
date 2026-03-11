@@ -212,23 +212,23 @@ fun PlanScreen(
         } else {
             itemsIndexed(
                 items = uiState.scheduledItems,
-                key = { _, block -> block.id }
-            ) { index, block ->
+                key = { _, item -> item.block.id }
+            ) { index, item ->
                 ScheduledBlockCard(
-                    block = block,
-                    onUp = { planViewModel.moveScheduledUp(block.id) },
-                    onDown = { planViewModel.moveScheduledDown(block.id) },
-                    onRemove = { planViewModel.remove(block.id) },
+                    scheduledItem = item,
+                    onUp = { planViewModel.moveScheduledUp(item.block.id) },
+                    onDown = { planViewModel.moveScheduledDown(item.block.id) },
+                    onRemove = { planViewModel.remove(item.block.id) },
                     onSave = { title, time, duration, notes ->
                         planViewModel.updateScheduledItem(
-                            blockId = block.id,
+                            blockId = item.block.id,
                             title = title,
                             startTime = time,
                             durationMin = duration,
                             notes = notes
                         )
                     },
-                    onConvertToOption = { planViewModel.convertScheduledToOption(block.id) },
+                    onConvertToOption = { planViewModel.convertScheduledToOption(item.block.id) },
                     canMoveUp = index > 0,
                     canMoveDown = index < uiState.scheduledItems.lastIndex
                 )
@@ -338,7 +338,7 @@ private fun EmptySectionCard(text: String) {
 
 @Composable
 private fun ScheduledBlockCard(
-    block: PlanBlock,
+    scheduledItem: ScheduledPlanItemUi,
     onUp: () -> Unit,
     onDown: () -> Unit,
     onRemove: () -> Unit,
@@ -347,6 +347,8 @@ private fun ScheduledBlockCard(
     canMoveUp: Boolean,
     canMoveDown: Boolean
 ) {
+    val block = scheduledItem.block
+
     var isEditing by remember(block.id) { mutableStateOf(false) }
     var title by remember(block.id, block.title) { mutableStateOf(block.title) }
     var time by remember(block.id, block.startTime) { mutableStateOf(block.startTime ?: "10:00") }
@@ -355,6 +357,13 @@ private fun ScheduledBlockCard(
 
     BlockCardFrame(
         block = block,
+        timeRange = buildString {
+            append(block.startTime ?: "--:--")
+            scheduledItem.endTime?.let {
+                append(" → ").append(it)
+            }
+        },
+        warnings = scheduledItem.warnings,
         canMoveUp = canMoveUp,
         canMoveDown = canMoveDown,
         onUp = onUp,
@@ -466,6 +475,8 @@ private fun OptionBlockCard(
 
     BlockCardFrame(
         block = block,
+        timeRange = null,
+        warnings = emptyList(),
         canMoveUp = canMoveUp,
         canMoveDown = canMoveDown,
         onUp = onUp,
@@ -571,6 +582,8 @@ private fun OptionBlockCard(
 @Composable
 private fun BlockCardFrame(
     block: PlanBlock,
+    timeRange: String?,
+    warnings: List<String>,
     canMoveUp: Boolean,
     canMoveDown: Boolean,
     onUp: () -> Unit,
@@ -599,12 +612,25 @@ private fun BlockCardFrame(
             )
 
             val meta = buildString {
-                block.startTime?.let { append(it).append(" • ") }
+                if (!timeRange.isNullOrBlank()) {
+                    append(timeRange).append(" • ")
+                } else {
+                    block.startTime?.let { append(it).append(" • ") }
+                }
                 append("${block.durationMin} min")
                 block.location?.areaHint?.let { append(" • ").append(it) }
             }
 
             Text(meta, style = MaterialTheme.typography.labelMedium)
+
+            if (warnings.isNotEmpty()) {
+                warnings.forEach { warning ->
+                    Text(
+                        text = "Warning: $warning",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
 
             block.notes?.let {
                 Text(it, style = MaterialTheme.typography.bodyMedium)

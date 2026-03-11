@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.Locale
@@ -24,11 +25,17 @@ data class PlanDayUi(
     val label: String
 )
 
+data class ScheduledPlanItemUi(
+    val block: PlanBlock,
+    val endTime: String?,
+    val warnings: List<String>
+)
+
 data class PlanUiState(
     val days: List<PlanDayUi> = emptyList(),
     val selectedDayIndex: Int = 0,
     val selectedDay: PlanDayUi? = null,
-    val scheduledItems: List<PlanBlock> = emptyList(),
+    val scheduledItems: List<ScheduledPlanItemUi> = emptyList(),
     val optionItems: List<PlanBlock> = emptyList(),
     val allBlocks: List<PlanBlock> = emptyList()
 )
@@ -47,15 +54,16 @@ class PlanViewModel(
             val safeSelectedDay = selectedDay.coerceIn(0, days.lastIndex.coerceAtLeast(0))
             val dayBlocks = blocks.filter { it.dayIndex == safeSelectedDay }
 
+            val scheduledBlocks = dayBlocks
+                .filter { it.timingType == PlanTimingType.FIXED }
+                .sortedBy { it.startTime ?: "99:99" }
+
             PlanUiState(
                 days = days,
                 selectedDayIndex = safeSelectedDay,
                 selectedDay = days.getOrNull(safeSelectedDay),
-                scheduledItems = dayBlocks
-                    .filter { it.timingType == PlanTimingType.FIXED }
-                    .sortedBy { it.startTime ?: "99:99" },
-                optionItems = dayBlocks
-                    .filter { it.timingType == PlanTimingType.OPTION },
+                scheduledItems = buildScheduledTimeline(scheduledBlocks),
+                optionItems = dayBlocks.filter { it.timingType == PlanTimingType.OPTION },
                 allBlocks = blocks
             )
         }.stateIn(
@@ -238,6 +246,64 @@ class PlanViewModel(
         return if (TIME_REGEX.matches(trimmed)) trimmed else "10:00"
     }
 
+    private fun buildScheduledTimeline(blocks: List<PlanBlock>): List<ScheduledPlanItemUi> {
+        val parsed = blocks.map { block ->
+            val start = parseTime(block.startTime)
+            val end = start?.plusMinutes(block.durationMin.toLong())
+            ParsedScheduledItem(
+                block = block,
+                start = start,
+                end = end
+            )
+        }
+
+        return parsed.mapIndexed { index, current ->
+            val warnings = mutableListOf<String>()
+
+            if (current.start == null) {
+                warnings += "Invalid or missing start time."
+            }
+
+            val previous = parsed.getOrNull(index - 1)
+            if (
+                previous?.start != null &&
+                previous.end != null &&
+                current.start != null &&
+                current.start.isBefore(previous.start)
+            ) {
+                warnings += "Starts before the previous scheduled item."
+            }
+
+            if (
+                previous?.end != null &&
+                current.start != null &&
+                current.start.isBefore(previous.end)
+            ) {
+                warnings += "Overlaps with the previous item."
+            }
+
+            val next = parsed.getOrNull(index + 1)
+            if (
+                current.end != null &&
+                next?.start != null &&
+                current.end.isAfter(next.start)
+            ) {
+                warnings += "Overlaps with the next item."
+            }
+
+            ScheduledPlanItemUi(
+                block = current.block,
+                endTime = current.end?.format(TIME_FORMATTER),
+                warnings = warnings.distinct()
+            )
+        }
+    }
+
+    private fun parseTime(value: String?): LocalTime? {
+        if (value.isNullOrBlank()) return null
+        return runCatching { LocalTime.parse(value, TIME_FORMATTER) }.getOrNull()
+    }
+
     private fun buildTripDays(startDateIso: String, endDateIso: String): List<PlanDayUi> {
         val parsedStart = runCatching { LocalDate.parse(startDateIso) }.getOrNull()
         val parsedEnd = runCatching { LocalDate.parse(endDateIso) }.getOrNull()
@@ -275,7 +341,14 @@ class PlanViewModel(
         return result
     }
 
+    private data class ParsedScheduledItem(
+        val block: PlanBlock,
+        val start: LocalTime?,
+        val end: LocalTime?
+    )
+
     private companion object {
         private val TIME_REGEX = Regex("^([01]\\d|2[0-3]):[0-5]\\d$")
+        private val TIME_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
     }
 }
